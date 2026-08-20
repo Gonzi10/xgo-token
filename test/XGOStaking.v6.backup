@@ -1,0 +1,293 @@
+
+import { expect } from "chai";
+import { network } from "hardhat";
+
+describe("XGOStaking", function () {
+  it("permite hacer staking y registra el bloqueo", async function () {
+    const { ethers } = await network.connect();
+
+    const [owner] = await ethers.getSigners();
+
+    const XGO = await ethers.getContractFactory("XGO");
+    const xgo = await XGO.deploy();
+    await xgo.waitForDeployment();
+
+    const Staking = await ethers.getContractFactory("XGOStaking");
+    const staking = await Staking.deploy(await xgo.getAddress());
+    await staking.waitForDeployment();
+
+    const amount = ethers.parseUnits("1000", 18);
+
+    await xgo.approve(await staking.getAddress(), amount);
+    await staking.stake(amount);
+
+    const stake = await staking.getStake(owner.address);
+
+    expect(stake.amount).to.equal(amount);
+    expect(stake.unlockTime).to.be.greaterThan(0);
+  });
+});
+it("impide retirar antes de los 7 días", async function () {
+  const { ethers } = await network.connect();
+
+  const [owner] = await ethers.getSigners();
+
+  const XGO = await ethers.getContractFactory("XGO");
+  const xgo = await XGO.deploy();
+  await xgo.waitForDeployment();
+
+  const Staking = await ethers.getContractFactory("XGOStaking");
+  const staking = await Staking.deploy(await xgo.getAddress());
+  await staking.waitForDeployment();
+
+  const amount = ethers.parseUnits("1000", 18);
+
+  await xgo.approve(await staking.getAddress(), amount);
+  await staking.stake(amount);
+
+  await expect(
+    staking.withdraw()
+  ).to.be.revertedWith("Still locked");
+});
+
+describe("XGOStaking - auditoría de seguridad", function () {
+
+  async function deployStaking() {
+    const { ethers } = await network.connect();
+
+    const XGO = await ethers.getContractFactory("XGO");
+    const xgo = await XGO.deploy();
+    await xgo.waitForDeployment();
+
+    const Staking = await ethers.getContractFactory("XGOStaking");
+    const staking = await Staking.deploy(await xgo.getAddress());
+    await staking.waitForDeployment();
+
+    return { ethers, xgo, staking };
+  }
+
+  it("rechaza una cantidad cero", async function () {
+    const { staking } = await deployStaking();
+
+    await expect(
+      staking.stake(0n)
+    ).to.be.revertedWith("Amount is zero");
+  });
+
+  it("rechaza un segundo staking mientras existe uno activo", async function () {
+    const { ethers, xgo, staking } = await deployStaking();
+
+    const amount = ethers.parseUnits("1000", 18);
+
+    await xgo.approve(await staking.getAddress(), amount * 2n);
+    await staking.stake(amount);
+
+    await expect(
+      staking.stake(amount)
+    ).to.be.revertedWith("Existing stake");
+  });
+
+  it("rechaza retirar cuando no existe staking", async function () {
+    const { staking } = await deployStaking();
+
+    await expect(
+      staking.withdraw()
+    ).to.be.revertedWith("No stake");
+  });
+
+  it("permite retirar después de exactamente 7 días", async function () {
+    const { ethers, xgo, staking } = await deployStaking();
+
+    const [owner] = await ethers.getSigners();
+    const amount = ethers.parseUnits("1000", 18);
+
+    await xgo.approve(await staking.getAddress(), amount);
+    await staking.stake(amount);
+
+    const balanceBefore = await xgo.balanceOf(owner.address);
+
+    await ethers.provider.send("evm_increaseTime", [
+      7 * 24 * 60 * 60
+    ]);
+
+    await ethers.provider.send("evm_mine");
+
+    await staking.withdraw();
+
+    const balanceAfter = await xgo.balanceOf(owner.address);
+
+    expect(balanceAfter - balanceBefore).to.equal(amount);
+
+    const stake = await staking.getStake(owner.address);
+
+    expect(stake.amount).to.equal(0n);
+    expect(stake.unlockTime).to.equal(0n);
+  });
+
+  it("elimina completamente el stake después del retiro", async function () {
+    const { ethers, xgo, staking } = await deployStaking();
+
+    const [owner] = await ethers.getSigners();
+    const amount = ethers.parseUnits("500", 18);
+
+    await xgo.approve(await staking.getAddress(), amount);
+    await staking.stake(amount);
+
+    await ethers.provider.send("evm_increaseTime", [
+      7 * 24 * 60 * 60
+    ]);
+
+    await ethers.provider.send("evm_mine");
+
+    await staking.withdraw();
+
+    const stake = await staking.getStake(owner.address);
+
+    expect(stake.amount).to.equal(0n);
+    expect(stake.unlockTime).to.equal(0n);
+
+    expect(
+      await xgo.balanceOf(await staking.getAddress())
+    ).to.equal(0n);
+  });
+
+  it("permite hacer staking nuevamente después de retirar", async function () {
+    const { ethers, xgo, staking } = await deployStaking();
+
+    const [owner] = await ethers.getSigners();
+
+    const firstAmount = ethers.parseUnits("500", 18);
+    const secondAmount = ethers.parseUnits("750", 18);
+
+    await xgo.approve(
+      await staking.getAddress(),
+      firstAmount + secondAmount
+    );
+
+    await staking.stake(firstAmount);
+
+    await ethers.provider.send("evm_increaseTime", [
+      7 * 24 * 60 * 60
+    ]);
+
+    await ethers.provider.send("evm_mine");
+
+    await staking.withdraw();
+
+    await staking.stake(secondAmount);
+
+    const stake = await staking.getStake(owner.address);
+
+    expect(stake.amount).to.equal(secondAmount);
+    expect(stake.unlockTime).to.be.greaterThan(0n);
+  });
+
+  it("mantiene separados los stakes de dos usuarios", async function () {
+    const { ethers, xgo, staking } = await deployStaking();
+
+    const [owner, user] = await ethers.getSigners();
+
+    const amountOwner = ethers.parseUnits("1000", 18);
+    const amountUser = ethers.parseUnits("2000", 18);
+
+    await xgo.transfer(user.address, amountUser);
+
+    await xgo.approve(
+      await staking.getAddress(),
+      amountOwner
+    );
+
+
+    await xgo.connect(user).approve(
+      await staking.getAddress(),
+      amountUser
+    );
+
+    await staking.stake(amountOwner);
+    await staking.connect(user).stake(amountUser);
+
+    const ownerStake =
+      await staking.getStake(owner.address);
+
+    const userStake =
+      await staking.getStake(user.address);
+
+    expect(ownerStake.amount).to.equal(amountOwner);
+    expect(userStake.amount).to.equal(amountUser);
+
+    expect(ownerStake.unlockTime)
+      .to.be.greaterThan(0n);
+
+    expect(userStake.unlockTime)
+      .to.be.greaterThan(0n);
+
+    expect(ownerStake.unlockTime)
+      .to.be.greaterThanOrEqual(userStake.unlockTime - 1n);
+
+    expect(ownerStake.unlockTime)
+      .to.be.lessThanOrEqual(userStake.unlockTime + 1n);
+  });
+
+  it("rechaza el constructor con dirección XGO cero", async function () {
+    const { ethers } = await network.connect();
+
+    const Staking = await ethers.getContractFactory("XGOStaking");
+
+    await expect(
+      Staking.deploy(ethers.ZeroAddress)
+    ).to.be.revertedWith("XGO address is zero");
+  });
+
+});
+
+describe("XGOStaking - auditoría de balance real", function () {
+
+  it("no permite que una donación directa altere el stake registrado", async function () {
+    const { ethers } = await network.connect();
+
+    const [owner] = await ethers.getSigners();
+
+    const XGO = await ethers.getContractFactory("XGO");
+    const xgo = await XGO.deploy();
+    await xgo.waitForDeployment();
+
+    const Staking = await ethers.getContractFactory("XGOStaking");
+    const staking = await Staking.deploy(
+      await xgo.getAddress()
+    );
+    await staking.waitForDeployment();
+
+    const stakeAmount =
+      ethers.parseUnits("1000", 18);
+
+    const donationAmount =
+      ethers.parseUnits("500", 18);
+
+    await xgo.approve(
+      await staking.getAddress(),
+      stakeAmount
+    );
+
+    await staking.stake(stakeAmount);
+
+    await xgo.transfer(
+      await staking.getAddress(),
+      donationAmount
+    );
+
+    const recordedStake =
+      await staking.getStake(owner.address);
+
+    expect(recordedStake.amount)
+      .to.equal(stakeAmount);
+
+    const realBalance =
+      await xgo.balanceOf(
+        await staking.getAddress()
+      );
+
+    expect(realBalance)
+      .to.equal(stakeAmount + donationAmount);
+  });
+
+});

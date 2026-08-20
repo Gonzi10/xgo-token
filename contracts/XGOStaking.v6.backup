@@ -1,0 +1,85 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
+
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
+contract XGOStaking is ReentrancyGuard {
+    IERC20 public immutable xgo;
+
+    uint256 public constant LOCK_PERIOD = 7 days;
+
+    struct Stake {
+        uint256 amount;
+        uint256 unlockTime;
+    }
+
+    mapping(address => Stake) public stakes;
+
+    event Staked(
+        address indexed user,
+        uint256 amount,
+        uint256 unlockTime
+    );
+
+    event Withdrawn(
+        address indexed user,
+        uint256 amount
+    );
+
+    constructor(address _xgo) {
+        require(_xgo != address(0), "XGO address is zero");
+        xgo = IERC20(_xgo);
+    }
+
+    function stake(uint256 amount) external nonReentrant {
+        require(amount > 0, "Amount is zero");
+        require(stakes[msg.sender].amount == 0, "Existing stake");
+
+        require(
+            xgo.transferFrom(msg.sender, address(this), amount),
+            "Transfer failed"
+        );
+
+        uint256 unlockTime = block.timestamp + LOCK_PERIOD;
+
+        stakes[msg.sender] = Stake({
+            amount: amount,
+            unlockTime: unlockTime
+        });
+
+        emit Staked(msg.sender, amount, unlockTime);
+    }
+
+    function withdraw() external nonReentrant {
+        Stake memory userStake = stakes[msg.sender];
+
+        require(userStake.amount > 0, "No stake");
+        require(
+            block.timestamp >= userStake.unlockTime,
+            "Still locked"
+        );
+
+        delete stakes[msg.sender];
+
+        require(
+            xgo.transfer(msg.sender, userStake.amount),
+            "Transfer failed"
+        );
+
+        emit Withdrawn(msg.sender, userStake.amount);
+    }
+
+    function getStake(address user)
+        external
+        view
+        returns (uint256 amount, uint256 unlockTime)
+    {
+        Stake memory userStake = stakes[user];
+
+        return (
+            userStake.amount,
+            userStake.unlockTime
+        );
+    }
+}

@@ -1,0 +1,51 @@
+
+import { expect } from "chai";
+import { network } from "hardhat";
+
+describe("XGOStaking", function () {
+  it("permite hacer staking y registra el bloqueo", async function () {
+    const { ethers } = await network.connect();
+
+    const [owner] = await ethers.getSigners();
+
+    const XGO = await ethers.getContractFactory("XGO");
+    const xgo = await XGO.deploy();
+    await xgo.waitForDeployment();
+
+    const Staking = await ethers.getContractFactory("XGOStaking");
+    const staking = await Staking.deploy(await xgo.getAddress());
+    await staking.waitForDeployment();
+
+    const amount = ethers.parseUnits("1000", 18);
+
+    await xgo.approve(await staking.getAddress(), amount);
+    await staking.stake(amount);
+
+    const stake = await staking.getStake(owner.address);
+
+    expect(stake.amount).to.equal(amount);
+    expect(stake.unlockTime).to.be.greaterThan(0);
+  });
+});
+it("impide retirar antes de los 7 días", async function () {
+  const { ethers } = await network.connect();
+
+  const [owner] = await ethers.getSigners();
+
+  const XGO = await ethers.getContractFactory("XGO");
+  const xgo = await XGO.deploy();
+  await xgo.waitForDeployment();
+
+  const Staking = await ethers.getContractFactory("XGOStaking");
+  const staking = await Staking.deploy(await xgo.getAddress());
+  await staking.waitForDeployment();
+
+  const amount = ethers.parseUnits("1000", 18);
+
+  await xgo.approve(await staking.getAddress(), amount);
+  await staking.stake(amount);
+
+  await expect(
+    staking.withdraw()
+  ).to.be.revertedWith("Still locked");
+});

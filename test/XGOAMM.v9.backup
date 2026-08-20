@@ -1,0 +1,1098 @@
+import { expect } from "chai";
+import hre from "hardhat";
+
+describe("XGOAMM", function () {
+  it("crea el pool y permite añadir liquidez", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const Token = await ethers.getContractFactory("TestToken");
+
+    const tokenA = await Token.deploy();
+    const tokenB = await Token.deploy();
+
+    await tokenA.waitForDeployment();
+    await tokenB.waitForDeployment();
+
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const amm = await AMM.deploy(
+      await tokenA.getAddress(),
+      await tokenB.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const amountA = ethers.parseUnits("1000", 18);
+    const amountB = ethers.parseUnits("1000", 18);
+
+    await tokenA.approve(
+      await amm.getAddress(),
+      amountA
+    );
+
+    await tokenB.approve(
+      await amm.getAddress(),
+      amountB
+    );
+
+    await amm.addLiquidity(
+      amountA,
+      amountB
+    );
+
+    expect(await amm.reserveA()).to.equal(amountA);
+    expect(await amm.reserveB()).to.equal(amountB);
+    expect(await amm.totalLiquidity()).to.be.gt(0);
+  });
+
+  it("calcula correctamente un swap", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const Token = await ethers.getContractFactory("TestToken");
+
+    const tokenA = await Token.deploy();
+    const tokenB = await Token.deploy();
+
+    await tokenA.waitForDeployment();
+    await tokenB.waitForDeployment();
+
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const amm = await AMM.deploy(
+      await tokenA.getAddress(),
+      await tokenB.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const amountA = ethers.parseUnits("1000", 18);
+    const amountB = ethers.parseUnits("1000", 18);
+
+    await tokenA.approve(
+      await amm.getAddress(),
+      amountA
+    );
+
+    await tokenB.approve(
+      await amm.getAddress(),
+      amountB
+    );
+
+    await amm.addLiquidity(
+      amountA,
+      amountB
+    );
+
+    const amountIn = ethers.parseUnits("10", 18);
+
+    const amountOut = await amm.getAmountOut(
+      amountIn,
+      amountA,
+      amountB
+    );
+
+    expect(amountOut).to.be.gt(0);
+    expect(amountOut).to.be.lt(amountIn);
+  });
+
+  it("permite hacer swap A por B", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const [owner] = await ethers.getSigners();
+
+    const Token = await ethers.getContractFactory("TestToken");
+
+    const tokenA = await Token.deploy();
+    const tokenB = await Token.deploy();
+
+    await tokenA.waitForDeployment();
+    await tokenB.waitForDeployment();
+
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const amm = await AMM.deploy(
+      await tokenA.getAddress(),
+      await tokenB.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const amountA = ethers.parseUnits("1000", 18);
+    const amountB = ethers.parseUnits("1000", 18);
+
+    await tokenA.approve(
+      await amm.getAddress(),
+      amountA
+    );
+
+    await tokenB.approve(
+      await amm.getAddress(),
+      amountB
+    );
+
+    await amm.addLiquidity(
+      amountA,
+      amountB
+    );
+
+    const amountIn = ethers.parseUnits("10", 18);
+
+    const expectedOut = await amm.getAmountOut(
+      amountIn,
+      amountA,
+      amountB
+    );
+
+    await tokenA.approve(
+      await amm.getAddress(),
+      amountIn
+    );
+
+    const balanceBefore =
+      await tokenB.balanceOf(owner.address);
+
+    await amm.swapAForB(
+      amountIn,
+      expectedOut
+    );
+
+    const balanceAfter =
+      await tokenB.balanceOf(owner.address);
+
+    expect(balanceAfter - balanceBefore)
+      .to.equal(expectedOut);
+  });
+  it("permite hacer swap B por A", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const [owner] = await ethers.getSigners();
+
+    const Token = await ethers.getContractFactory("TestToken");
+
+    const tokenA = await Token.deploy();
+    const tokenB = await Token.deploy();
+
+    await tokenA.waitForDeployment();
+    await tokenB.waitForDeployment();
+
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const amm = await AMM.deploy(
+      await tokenA.getAddress(),
+      await tokenB.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const amountA = ethers.parseUnits("1000", 18);
+    const amountB = ethers.parseUnits("1000", 18);
+
+    await tokenA.approve(
+      await amm.getAddress(),
+      amountA
+    );
+
+    await tokenB.approve(
+      await amm.getAddress(),
+      amountB
+    );
+
+    await amm.addLiquidity(
+      amountA,
+      amountB
+    );
+
+    const amountIn = ethers.parseUnits("10", 18);
+
+    const expectedOut = await amm.getAmountOut(
+      amountIn,
+      amountB,
+      amountA
+    );
+
+    await tokenB.approve(
+      await amm.getAddress(),
+      amountIn
+    );
+
+    const balanceBefore =
+      await tokenA.balanceOf(owner.address);
+
+    await amm.swapBForA(
+      amountIn,
+      expectedOut
+    );
+
+    const balanceAfter =
+      await tokenA.balanceOf(owner.address);
+
+    expect(balanceAfter - balanceBefore)
+      .to.equal(expectedOut);
+  });
+  it("rechaza un swap si no se cumple el slippage", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const Token = await ethers.getContractFactory("TestToken");
+
+    const tokenA = await Token.deploy();
+    const tokenB = await Token.deploy();
+
+    await tokenA.waitForDeployment();
+    await tokenB.waitForDeployment();
+
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const amm = await AMM.deploy(
+      await tokenA.getAddress(),
+      await tokenB.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const amountA = ethers.parseUnits("1000", 18);
+    const amountB = ethers.parseUnits("1000", 18);
+
+    await tokenA.approve(
+      await amm.getAddress(),
+      amountA
+    );
+
+    await tokenB.approve(
+      await amm.getAddress(),
+      amountB
+    );
+
+    await amm.addLiquidity(
+      amountA,
+      amountB
+    );
+
+    const amountIn = ethers.parseUnits("10", 18);
+
+    await tokenA.approve(
+      await amm.getAddress(),
+      amountIn
+    );
+
+    const impossibleMinimum =
+      ethers.parseUnits("100", 18);
+
+    await expect(
+      amm.swapAForB(
+        amountIn,
+        impossibleMinimum
+      )
+    ).to.be.revertedWith("Slippage");
+  });
+
+  it("rechaza cálculos que provocarían overflow", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const Token = await ethers.getContractFactory("TestToken");
+
+    const tokenA = await Token.deploy();
+    const tokenB = await Token.deploy();
+
+    await tokenA.waitForDeployment();
+    await tokenB.waitForDeployment();
+
+    const amm = await AMM.deploy(
+      await tokenA.getAddress(),
+      await tokenB.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const max = ethers.MaxUint256;
+
+    await expect(
+      amm.getAmountOut(
+        max,
+        max,
+        max
+      )
+    ).to.be.revert(ethers);
+  });
+
+  it("rechaza liquidez desproporcionada en un pool existente", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const Token = await ethers.getContractFactory("TestToken");
+
+    const tokenA = await Token.deploy();
+    const tokenB = await Token.deploy();
+
+    await tokenA.waitForDeployment();
+    await tokenB.waitForDeployment();
+
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const amm = await AMM.deploy(
+      await tokenA.getAddress(),
+      await tokenB.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const initialA = ethers.parseUnits("1000", 18);
+    const initialB = ethers.parseUnits("1000", 18);
+
+    await tokenA.approve(
+      await amm.getAddress(),
+      initialA
+    );
+
+    await tokenB.approve(
+      await amm.getAddress(),
+      initialB
+    );
+
+    await amm.addLiquidity(
+      initialA,
+      initialB
+    );
+
+    const badA = ethers.parseUnits("1000", 18);
+    const badB = ethers.parseUnits("1", 18);
+
+    await tokenA.approve(
+      await amm.getAddress(),
+      badA
+    );
+
+    await tokenB.approve(
+      await amm.getAddress(),
+      badB
+    );
+
+    await expect(
+      amm.addLiquidity(badA, badB)
+    ).to.be.revert(ethers);
+  });
+});
+
+describe("XGOAMM - auditoría de liquidez", function () {
+
+  it("permite retirar liquidez parcialmente y conserva las reservas", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const [owner] = await ethers.getSigners();
+
+    const Token = await ethers.getContractFactory("TestToken");
+
+    const tokenA = await Token.deploy();
+    const tokenB = await Token.deploy();
+
+    await tokenA.waitForDeployment();
+    await tokenB.waitForDeployment();
+
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const amm = await AMM.deploy(
+      await tokenA.getAddress(),
+      await tokenB.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const amountA = ethers.parseUnits("1000", 18);
+    const amountB = ethers.parseUnits("1000", 18);
+
+    await tokenA.approve(await amm.getAddress(), amountA);
+    await tokenB.approve(await amm.getAddress(), amountB);
+
+    await amm.addLiquidity(amountA, amountB);
+
+    const totalLiquidity = await amm.totalLiquidity();
+
+    const removeAmount = totalLiquidity / 2n;
+
+    const balanceABefore =
+      await tokenA.balanceOf(owner.address);
+
+    const balanceBBefore =
+      await tokenB.balanceOf(owner.address);
+
+    await amm.removeLiquidity(removeAmount);
+
+    const balanceAAfter =
+      await tokenA.balanceOf(owner.address);
+
+    const balanceBAfter =
+      await tokenB.balanceOf(owner.address);
+
+    expect(balanceAAfter).to.be.gt(balanceABefore);
+    expect(balanceBAfter).to.be.gt(balanceBBefore);
+
+    expect(await amm.totalLiquidity())
+      .to.equal(totalLiquidity - removeAmount);
+
+    expect(await amm.reserveA())
+      .to.be.lt(amountA);
+
+    expect(await amm.reserveB())
+      .to.be.lt(amountB);
+  });
+
+
+  it("permite retirar toda la liquidez", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const Token = await ethers.getContractFactory("TestToken");
+
+    const tokenA = await Token.deploy();
+    const tokenB = await Token.deploy();
+
+    await tokenA.waitForDeployment();
+    await tokenB.waitForDeployment();
+
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const amm = await AMM.deploy(
+      await tokenA.getAddress(),
+      await tokenB.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const amountA = ethers.parseUnits("1000", 18);
+    const amountB = ethers.parseUnits("1000", 18);
+
+    await tokenA.approve(await amm.getAddress(), amountA);
+    await tokenB.approve(await amm.getAddress(), amountB);
+
+    await amm.addLiquidity(amountA, amountB);
+
+    const liquidity = await amm.totalLiquidity();
+
+    await amm.removeLiquidity(liquidity);
+
+    expect(await amm.totalLiquidity()).to.equal(0);
+    expect(await amm.reserveA()).to.equal(0);
+    expect(await amm.reserveB()).to.equal(0);
+  });
+
+
+  it("mantiene correctamente las reservas al añadir liquidez dos veces", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const Token = await ethers.getContractFactory("TestToken");
+
+    const tokenA = await Token.deploy();
+    const tokenB = await Token.deploy();
+
+    await tokenA.waitForDeployment();
+    await tokenB.waitForDeployment();
+
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const amm = await AMM.deploy(
+      await tokenA.getAddress(),
+      await tokenB.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const firstA = ethers.parseUnits("1000", 18);
+    const firstB = ethers.parseUnits("1000", 18);
+
+    await tokenA.approve(await amm.getAddress(), firstA);
+    await tokenB.approve(await amm.getAddress(), firstB);
+
+    await amm.addLiquidity(firstA, firstB);
+
+    const secondA = ethers.parseUnits("500", 18);
+    const secondB = ethers.parseUnits("500", 18);
+
+    await tokenA.approve(await amm.getAddress(), secondA);
+    await tokenB.approve(await amm.getAddress(), secondB);
+
+    await amm.addLiquidity(secondA, secondB);
+
+    expect(await amm.reserveA())
+      .to.equal(firstA + secondA);
+
+    expect(await amm.reserveB())
+      .to.equal(firstB + secondB);
+
+    expect(await amm.totalLiquidity())
+      .to.be.gt(0);
+  });
+
+});
+
+describe("XGOAMM - auditoría de reservas reales", function () {
+
+  it("mantiene balance real igual a las reservas después de añadir liquidez", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const Token = await ethers.getContractFactory("TestToken");
+
+    const tokenA = await Token.deploy();
+    const tokenB = await Token.deploy();
+
+    await tokenA.waitForDeployment();
+    await tokenB.waitForDeployment();
+
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const amm = await AMM.deploy(
+      await tokenA.getAddress(),
+      await tokenB.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const amountA = ethers.parseUnits("1000", 18);
+    const amountB = ethers.parseUnits("1000", 18);
+
+    await tokenA.approve(await amm.getAddress(), amountA);
+    await tokenB.approve(await amm.getAddress(), amountB);
+
+    await amm.addLiquidity(amountA, amountB);
+
+    const ammAddress = await amm.getAddress();
+
+    const realA = await tokenA.balanceOf(ammAddress);
+    const realB = await tokenB.balanceOf(ammAddress);
+
+    expect(realA).to.equal(await amm.reserveA());
+    expect(realB).to.equal(await amm.reserveB());
+  });
+
+
+  it("detecta tokens enviados directamente al contrato fuera de las reservas", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const Token = await ethers.getContractFactory("TestToken");
+
+    const tokenA = await Token.deploy();
+    const tokenB = await Token.deploy();
+
+    await tokenA.waitForDeployment();
+    await tokenB.waitForDeployment();
+
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const amm = await AMM.deploy(
+      await tokenA.getAddress(),
+      await tokenB.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const amountA = ethers.parseUnits("1000", 18);
+    const amountB = ethers.parseUnits("1000", 18);
+
+    await tokenA.approve(await amm.getAddress(), amountA);
+    await tokenB.approve(await amm.getAddress(), amountB);
+
+    await amm.addLiquidity(amountA, amountB);
+
+    const extraA = ethers.parseUnits("100", 18);
+
+    await tokenA.transfer(
+      await amm.getAddress(),
+      extraA
+    );
+
+    const realA =
+      await tokenA.balanceOf(await amm.getAddress());
+
+    const reserveA =
+      await amm.reserveA();
+
+    expect(realA).to.equal(reserveA + extraA);
+  });
+
+
+  it("no permite retirar más liquidez de la registrada", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const Token = await ethers.getContractFactory("TestToken");
+
+    const tokenA = await Token.deploy();
+    const tokenB = await Token.deploy();
+
+    await tokenA.waitForDeployment();
+    await tokenB.waitForDeployment();
+
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const amm = await AMM.deploy(
+      await tokenA.getAddress(),
+      await tokenB.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const amountA = ethers.parseUnits("1000", 18);
+    const amountB = ethers.parseUnits("1000", 18);
+
+    await tokenA.approve(await amm.getAddress(), amountA);
+    await tokenB.approve(await amm.getAddress(), amountB);
+
+    await amm.addLiquidity(amountA, amountB);
+
+    const liquidity =
+      await amm.totalLiquidity();
+
+    await expect(
+      amm.removeLiquidity(liquidity + 1n)
+    ).to.be.revert(ethers);
+  });
+
+});
+
+describe("XGOAMM - auditoría de swaps y reservas", function () {
+
+  it("mantiene las reservas sincronizadas después de un swap", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const Token = await ethers.getContractFactory("TestToken");
+
+    const tokenA = await Token.deploy();
+    const tokenB = await Token.deploy();
+
+    await tokenA.waitForDeployment();
+    await tokenB.waitForDeployment();
+
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const amm = await AMM.deploy(
+      await tokenA.getAddress(),
+      await tokenB.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const amountA = ethers.parseUnits("1000", 18);
+    const amountB = ethers.parseUnits("1000", 18);
+
+    await tokenA.approve(await amm.getAddress(), amountA);
+    await tokenB.approve(await amm.getAddress(), amountB);
+
+    await amm.addLiquidity(amountA, amountB);
+
+    const amountIn = ethers.parseUnits("10", 18);
+
+    const amountOut = await amm.getAmountOut(
+      amountIn,
+      amountA,
+      amountB
+    );
+
+    await tokenA.approve(
+      await amm.getAddress(),
+      amountIn
+    );
+
+    await amm.swapAForB(
+      amountIn,
+      amountOut
+    );
+
+    const ammAddress = await amm.getAddress();
+
+    const realA = await tokenA.balanceOf(ammAddress);
+    const realB = await tokenB.balanceOf(ammAddress);
+
+    expect(realA).to.equal(await amm.reserveA());
+    expect(realB).to.equal(await amm.reserveB());
+  });
+
+
+  it("los tokens enviados directamente no modifican las reservas contables", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const Token = await ethers.getContractFactory("TestToken");
+
+    const tokenA = await Token.deploy();
+    const tokenB = await Token.deploy();
+
+    await tokenA.waitForDeployment();
+    await tokenB.waitForDeployment();
+
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const amm = await AMM.deploy(
+      await tokenA.getAddress(),
+      await tokenB.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const amountA = ethers.parseUnits("1000", 18);
+    const amountB = ethers.parseUnits("1000", 18);
+
+    await tokenA.approve(await amm.getAddress(), amountA);
+    await tokenB.approve(await amm.getAddress(), amountB);
+
+    await amm.addLiquidity(amountA, amountB);
+
+    const reserveBefore =
+      await amm.reserveA();
+
+    const extra =
+      ethers.parseUnits("500", 18);
+
+    await tokenA.transfer(
+      await amm.getAddress(),
+      extra
+    );
+
+    expect(await amm.reserveA())
+      .to.equal(reserveBefore);
+  });
+
+
+  it("rechaza un swap cuando la reserva de salida no alcanza", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const Token = await ethers.getContractFactory("TestToken");
+
+    const tokenA = await Token.deploy();
+    const tokenB = await Token.deploy();
+
+    await tokenA.waitForDeployment();
+    await tokenB.waitForDeployment();
+
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const amm = await AMM.deploy(
+      await tokenA.getAddress(),
+      await tokenB.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const amountA = ethers.parseUnits("1000", 18);
+    const amountB = ethers.parseUnits("1000", 18);
+
+    await tokenA.approve(await amm.getAddress(), amountA);
+    await tokenB.approve(await amm.getAddress(), amountB);
+
+    await amm.addLiquidity(amountA, amountB);
+
+    await tokenA.approve(
+      await amm.getAddress(),
+      ethers.parseUnits("10", 18)
+    );
+
+    await expect(
+      amm.swapAForB(
+        ethers.parseUnits("10", 18),
+        ethers.parseUnits("1000", 18)
+      )
+    ).to.be.revert(ethers);
+  });
+
+
+  it("permite retirar liquidez correctamente después de un swap", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const Token = await ethers.getContractFactory("TestToken");
+
+    const tokenA = await Token.deploy();
+    const tokenB = await Token.deploy();
+
+    await tokenA.waitForDeployment();
+    await tokenB.waitForDeployment();
+
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const amm = await AMM.deploy(
+      await tokenA.getAddress(),
+      await tokenB.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const amountA = ethers.parseUnits("1000", 18);
+    const amountB = ethers.parseUnits("1000", 18);
+
+    await tokenA.approve(await amm.getAddress(), amountA);
+    await tokenB.approve(await amm.getAddress(), amountB);
+
+    await amm.addLiquidity(amountA, amountB);
+
+    const swapIn = ethers.parseUnits("10", 18);
+
+    const swapOut = await amm.getAmountOut(
+      swapIn,
+      amountA,
+      amountB
+    );
+
+    await tokenA.approve(
+      await amm.getAddress(),
+      swapIn
+    );
+
+    await amm.swapAForB(
+      swapIn,
+      swapOut
+    );
+
+    const liquidity =
+      await amm.totalLiquidity();
+
+    await amm.removeLiquidity(liquidity);
+
+    expect(await amm.totalLiquidity())
+      .to.equal(0);
+
+    expect(await amm.reserveA())
+      .to.equal(0);
+
+    expect(await amm.reserveB())
+      .to.equal(0);
+  });
+
+});
+
+describe("XGOAMM - auditoría fee-on-transfer", function () {
+
+  it("detecta diferencia entre tokens enviados y tokens realmente recibidos", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const Token = await ethers.getContractFactory("TestToken");
+    const FeeToken = await ethers.getContractFactory("FeeToken");
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const normalToken = await Token.deploy();
+    const feeToken = await FeeToken.deploy();
+
+    await normalToken.waitForDeployment();
+    await feeToken.waitForDeployment();
+
+    const amm = await AMM.deploy(
+      await normalToken.getAddress(),
+      await feeToken.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const amountA = ethers.parseUnits("1000", 18);
+    const amountB = ethers.parseUnits("1000", 18);
+
+    await normalToken.approve(
+      await amm.getAddress(),
+      amountA
+    );
+
+    await feeToken.approve(
+      await amm.getAddress(),
+      amountB
+    );
+
+    const ammAddress = await amm.getAddress();
+
+    const balanceBeforeA =
+      await normalToken.balanceOf(ammAddress);
+
+    const balanceBeforeB =
+      await feeToken.balanceOf(ammAddress);
+
+    await amm.addLiquidity(
+      amountA,
+      amountB
+    );
+
+    const balanceAfterA =
+      await normalToken.balanceOf(ammAddress);
+
+    const balanceAfterB =
+      await feeToken.balanceOf(ammAddress);
+
+    const receivedA =
+      balanceAfterA - balanceBeforeA;
+
+    const receivedB =
+      balanceAfterB - balanceBeforeB;
+
+    expect(receivedA).to.equal(amountA);
+
+    expect(receivedB).to.equal(
+      amountB * 99n / 100n
+    );
+
+    expect(await amm.reserveA()).to.equal(amountA);
+
+    expect(await amm.reserveB()).to.equal(receivedB);
+
+    expect(receivedB).to.equal(
+      amountB * 99n / 100n
+    );
+  });
+
+});
+
+describe("XGOAMM - auditoría de swaps fee-on-transfer", function () {
+
+  it("calcula el swap usando los tokens realmente recibidos A -> B", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const [owner] = await ethers.getSigners();
+
+    const Token = await ethers.getContractFactory("TestToken");
+    const FeeToken = await ethers.getContractFactory("FeeToken");
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const normalToken = await Token.deploy();
+    const feeToken = await FeeToken.deploy();
+
+    await normalToken.waitForDeployment();
+    await feeToken.waitForDeployment();
+
+    const amm = await AMM.deploy(
+      await feeToken.getAddress(),
+      await normalToken.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const liquidityFee = ethers.parseUnits("1000", 18);
+    const liquidityNormal = ethers.parseUnits("1000", 18);
+
+    await feeToken.approve(
+      await amm.getAddress(),
+      liquidityFee
+    );
+
+    await normalToken.approve(
+      await amm.getAddress(),
+      liquidityNormal
+    );
+
+    await amm.addLiquidity(
+      liquidityFee,
+      liquidityNormal
+    );
+
+    const reserveFeeBefore = await amm.reserveA();
+    const reserveNormalBefore = await amm.reserveB();
+
+    const amountRequested = ethers.parseUnits("100", 18);
+
+    await feeToken.approve(
+      await amm.getAddress(),
+      amountRequested
+    );
+
+    const actualAmountIn =
+      amountRequested * 99n / 100n;
+
+    const expectedOut =
+      await amm.getAmountOut(
+        actualAmountIn,
+        reserveFeeBefore,
+        reserveNormalBefore
+      );
+
+    const balanceBefore =
+      await normalToken.balanceOf(owner.address);
+
+    await amm.swapAForB(
+      amountRequested,
+      expectedOut
+    );
+
+    const balanceAfter =
+      await normalToken.balanceOf(owner.address);
+
+    expect(balanceAfter - balanceBefore)
+      .to.equal(expectedOut);
+
+    expect(await amm.reserveA())
+      .to.equal(reserveFeeBefore + actualAmountIn);
+
+    expect(await amm.reserveB())
+      .to.equal(reserveNormalBefore - expectedOut);
+  });
+
+
+  it("calcula el swap usando los tokens realmente recibidos B -> A", async function () {
+    const { ethers } = await hre.network.connect();
+
+    const [owner] = await ethers.getSigners();
+
+    const Token = await ethers.getContractFactory("TestToken");
+    const FeeToken = await ethers.getContractFactory("FeeToken");
+    const AMM = await ethers.getContractFactory("XGOAMM");
+
+    const normalToken = await Token.deploy();
+    const feeToken = await FeeToken.deploy();
+
+    await normalToken.waitForDeployment();
+    await feeToken.waitForDeployment();
+
+    const amm = await AMM.deploy(
+      await normalToken.getAddress(),
+      await feeToken.getAddress()
+    );
+
+    await amm.waitForDeployment();
+
+    const liquidityNormal = ethers.parseUnits("1000", 18);
+    const liquidityFee = ethers.parseUnits("1000", 18);
+
+    await normalToken.approve(
+      await amm.getAddress(),
+      liquidityNormal
+    );
+
+    await feeToken.approve(
+      await amm.getAddress(),
+      liquidityFee
+    );
+
+    await amm.addLiquidity(
+      liquidityNormal,
+      liquidityFee
+    );
+
+    const reserveNormalBefore = await amm.reserveA();
+    const reserveFeeBefore = await amm.reserveB();
+
+    const amountRequested = ethers.parseUnits("100", 18);
+
+    await feeToken.approve(
+      await amm.getAddress(),
+      amountRequested
+    );
+
+    const actualAmountIn =
+      amountRequested * 99n / 100n;
+
+    const expectedOut =
+      await amm.getAmountOut(
+        actualAmountIn,
+        reserveFeeBefore,
+        reserveNormalBefore
+      );
+
+    const balanceBefore =
+      await normalToken.balanceOf(owner.address);
+
+    await amm.swapBForA(
+      amountRequested,
+      expectedOut
+    );
+
+    const balanceAfter =
+      await normalToken.balanceOf(owner.address);
+
+    expect(balanceAfter - balanceBefore)
+      .to.equal(expectedOut);
+
+    expect(await amm.reserveB())
+      .to.equal(reserveFeeBefore + actualAmountIn);
+
+    expect(await amm.reserveA())
+      .to.equal(reserveNormalBefore - expectedOut);
+  });
+
+});

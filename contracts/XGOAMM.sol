@@ -1,0 +1,418 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
+
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
+contract XGOAMM is ReentrancyGuard {
+    IERC20 public immutable tokenA;
+    IERC20 public immutable tokenB;
+
+    uint256 public reserveA;
+    uint256 public reserveB;
+
+    uint256 public totalLiquidity;
+
+    mapping(address => uint256) public liquidity;
+
+    event LiquidityAdded(
+        address indexed provider,
+        uint256 amountA,
+        uint256 amountB
+    );
+
+    event LiquidityRemoved(
+        address indexed provider,
+        uint256 amountA,
+        uint256 amountB
+    );
+
+    event Swap(
+        address indexed user,
+        address tokenIn,
+        uint256 amountIn,
+        uint256 amountOut
+    );
+
+    constructor(address _tokenA, address _tokenB) {
+        require(_tokenA != address(0), "Token A zero");
+        require(_tokenB != address(0), "Token B zero");
+        require(_tokenA != _tokenB, "Same token");
+
+        tokenA = IERC20(_tokenA);
+        tokenB = IERC20(_tokenB);
+    }
+
+    function addLiquidity(
+        uint256 amountA,
+        uint256 amountB
+    ) external nonReentrant {
+        require(amountA > 0, "Amount A zero");
+        require(amountB > 0, "Amount B zero");
+
+        uint256 balanceABefore =
+            tokenA.balanceOf(address(this));
+
+        uint256 balanceBBefore =
+            tokenB.balanceOf(address(this));
+
+        require(
+            tokenA.transferFrom(
+                msg.sender,
+                address(this),
+                amountA
+            ),
+            "A transfer failed"
+        );
+
+        require(
+            tokenB.transferFrom(
+                msg.sender,
+                address(this),
+                amountB
+            ),
+            "B transfer failed"
+        );
+
+        uint256 receivedA =
+            tokenA.balanceOf(address(this)) - balanceABefore;
+
+        uint256 receivedB =
+            tokenB.balanceOf(address(this)) - balanceBBefore;
+
+        require(receivedA > 0, "No A received");
+        require(receivedB > 0, "No B received");
+
+        uint256 liquidityMinted;
+
+        if (totalLiquidity == 0) {
+            require(
+                receivedA <= type(uint256).max / receivedB,
+                "Liquidity overflow"
+            );
+
+            liquidityMinted =
+                _sqrt(receivedA * receivedB);
+        } else {
+            require(
+                reserveA > 0 && reserveB > 0,
+                "Invalid reserves"
+            );
+
+            uint256 expectedB =
+                (receivedA * reserveB) / reserveA;
+
+            require(
+                expectedB == receivedB,
+                "Invalid liquidity ratio"
+            );
+
+            uint256 liquidityA =
+                (receivedA * totalLiquidity) / reserveA;
+
+            uint256 liquidityB =
+                (receivedB * totalLiquidity) / reserveB;
+
+            liquidityMinted =
+                liquidityA < liquidityB
+                    ? liquidityA
+                    : liquidityB;
+        }
+
+        require(
+            liquidityMinted > 0,
+            "Liquidity too small"
+        );
+
+        liquidity[msg.sender] += liquidityMinted;
+        totalLiquidity += liquidityMinted;
+
+        reserveA += receivedA;
+        reserveB += receivedB;
+
+        emit LiquidityAdded(
+            msg.sender,
+            receivedA,
+            receivedB
+        );
+    }
+
+    function swapAForB(
+        uint256 amountAIn,
+        uint256 minAmountBOut
+    )
+        external
+        nonReentrant
+        returns (uint256 amountBOut)
+    {
+        require(amountAIn > 0, "Amount zero");
+
+        uint256 balanceBefore =
+            tokenA.balanceOf(address(this));
+
+        require(
+            tokenA.transferFrom(
+                msg.sender,
+                address(this),
+                amountAIn
+            ),
+            "A transfer failed"
+        );
+
+        uint256 actualAmountIn =
+            tokenA.balanceOf(address(this)) -
+            balanceBefore;
+
+        require(
+            actualAmountIn > 0,
+            "Amount received zero"
+        );
+
+        amountBOut = getAmountOut(
+            actualAmountIn,
+            reserveA,
+            reserveB
+        );
+
+        require(
+            amountBOut >= minAmountBOut,
+            "Slippage"
+        );
+
+        require(
+            amountBOut < reserveB,
+            "Insufficient reserve"
+        );
+
+        uint256 balanceBBefore =
+            tokenB.balanceOf(address(this));
+
+        require(
+            tokenB.transfer(
+                msg.sender,
+                amountBOut
+            ),
+            "B transfer failed"
+        );
+
+        uint256 balanceBAfter =
+            tokenB.balanceOf(address(this));
+
+        require(
+            balanceBBefore - balanceBAfter == amountBOut,
+            "Fee-on-transfer output not supported"
+        );
+
+        reserveA += actualAmountIn;
+        reserveB -= amountBOut;
+
+        emit Swap(
+            msg.sender,
+            address(tokenA),
+            actualAmountIn,
+            amountBOut
+        );
+    }
+
+    function swapBForA(
+        uint256 amountBIn,
+        uint256 minAmountAOut
+    )
+        external
+        nonReentrant
+        returns (uint256 amountAOut)
+    {
+        require(amountBIn > 0, "Amount zero");
+
+        uint256 balanceBefore =
+            tokenB.balanceOf(address(this));
+
+        require(
+            tokenB.transferFrom(
+                msg.sender,
+                address(this),
+                amountBIn
+            ),
+            "B transfer failed"
+        );
+
+        uint256 actualAmountIn =
+            tokenB.balanceOf(address(this)) -
+            balanceBefore;
+
+        require(
+            actualAmountIn > 0,
+            "Amount received zero"
+        );
+
+        amountAOut = getAmountOut(
+            actualAmountIn,
+            reserveB,
+            reserveA
+        );
+
+        require(
+            amountAOut >= minAmountAOut,
+            "Slippage"
+        );
+
+        require(
+            amountAOut < reserveA,
+            "Insufficient reserve"
+        );
+
+        uint256 balanceABefore =
+            tokenA.balanceOf(address(this));
+
+        require(
+            tokenA.transfer(
+                msg.sender,
+                amountAOut
+            ),
+            "A transfer failed"
+        );
+
+        uint256 balanceAAfter =
+            tokenA.balanceOf(address(this));
+
+        require(
+            balanceABefore - balanceAAfter == amountAOut,
+            "Fee-on-transfer output not supported"
+        );
+
+        reserveB += actualAmountIn;
+        reserveA -= amountAOut;
+
+        emit Swap(
+            msg.sender,
+            address(tokenB),
+            actualAmountIn,
+            amountAOut
+        );
+    }
+
+    function removeLiquidity(
+        uint256 liquidityAmount
+    ) external nonReentrant {
+        require(
+            liquidityAmount > 0,
+            "Liquidity zero"
+        );
+
+        require(
+            liquidity[msg.sender] >= liquidityAmount,
+            "Insufficient liquidity"
+        );
+
+        uint256 amountA =
+            (liquidityAmount * reserveA) /
+            totalLiquidity;
+
+        uint256 amountB =
+            (liquidityAmount * reserveB) /
+            totalLiquidity;
+
+        liquidity[msg.sender] -= liquidityAmount;
+        totalLiquidity -= liquidityAmount;
+
+        reserveA -= amountA;
+        reserveB -= amountB;
+
+        uint256 balanceABefore =
+            tokenA.balanceOf(address(this));
+
+        require(
+            tokenA.transfer(
+                msg.sender,
+                amountA
+            ),
+            "A transfer failed"
+        );
+
+        uint256 balanceAAfter =
+            tokenA.balanceOf(address(this));
+
+        require(
+            balanceABefore - balanceAAfter == amountA,
+            "Fee-on-transfer output not supported"
+        );
+
+        uint256 balanceBBefore =
+            tokenB.balanceOf(address(this));
+
+        require(
+            tokenB.transfer(
+                msg.sender,
+                amountB
+            ),
+            "B transfer failed"
+        );
+
+        uint256 balanceBAfter =
+            tokenB.balanceOf(address(this));
+
+        require(
+            balanceBBefore - balanceBAfter == amountB,
+            "Fee-on-transfer output not supported"
+        );
+
+        emit LiquidityRemoved(
+            msg.sender,
+            amountA,
+            amountB
+        );
+    }
+
+    function getAmountOut(
+        uint256 amountIn,
+        uint256 reserveIn,
+        uint256 reserveOut
+    )
+        public
+        pure
+        returns (uint256)
+    {
+        require(
+            amountIn > 0,
+            "Amount zero"
+        );
+
+        require(
+            reserveIn > 0 &&
+            reserveOut > 0,
+            "No liquidity"
+        );
+
+        uint256 amountInWithFee =
+            amountIn * 997;
+
+        return
+            (amountInWithFee * reserveOut) /
+            ((reserveIn * 1000) + amountInWithFee);
+    }
+
+    function _sqrt(
+        uint256 y
+    )
+        internal
+        pure
+        returns (uint256 z)
+    {
+        if (y > 3) {
+            z = y;
+
+            uint256 x =
+                y / 2 + 1;
+
+            while (x < z) {
+                z = x;
+
+                x =
+                    (y / x + x) /
+                    2;
+            }
+        } else if (y != 0) {
+            z = 1;
+        }
+    }
+}
